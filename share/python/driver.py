@@ -49,7 +49,11 @@ import driver_nbody
 from procedures import *
 import p4util
 from p4util.exceptions import *
+import p4const
 # never import wrappers or aliases into this file
+
+import psi_axes
+import numpy as np
 
 def _find_derivative_type(ptype, method_name, user_dertype):
     r"""
@@ -1022,9 +1026,57 @@ def optimize(name, **kwargs):
         if (n > 1) and (psi4.get_option('OPTKING', 'OPT_TYPE') == 'IRC'):
             old_thisenergy = psi4.get_variable('CURRENT ENERGY')
 
+        print("Test print of restrained optimization penalty value (H)")
+        print(psi4.get_option("OPTKING", "TILT_PENALTY"))
+        print(psi4.has_option_changed("OPTKING", "TILT_PENALTY"))
+        
+        if psi4.get_option("OPTKING", "TILT_PENALTY") in ["FALSE", "OFF", "NO"]:
+            do_axis_penalty = False
+            axis_penalty = 0.0
+        elif psi4.get_option("OPTKING", "TILT_PENALTY") in ["TRUE", "ON", "YES"]:
+            do_axis_penalty = True
+            axis_penalty = 1000.0 / p4const.psi_hartree2kcalmol
+        else:
+            do_axis_penalty = True
+            try:
+                temp = float(psi4.get_option("OPTKING", "TILT_PENALTY"))
+            except ValueError:
+                raise ValidationError("tilt_penalty should be True, False, or Float")
+            axis_penalty = temp / p4const.psi_hartree2kcalmol
+        print(do_axis_penalty)
+        print(axis_penalty)
+
+        if do_axis_penalty:
+            if n == 1:
+                if moleculeclone.nfragments() < 2:
+                    raise ValidationError('RestrainFrag requires molecule to have at least 2 fragments, not %s' % (moleculeclone.nfragments()))
+                monomer1 = moleculeclone.extract_subsets(1)
+                orientmol = psi_axes.molecule(monomer1, axis_penalty)
+                orientmol.get_axes(True)
+                freeze_list = '\n'.join(['%i xyz' % (i) for i in range(monomer1.natom()+1, moleculeclone.natom()+1)])
+                psi4.set_local_option("OPTKING", "FROZEN_CARTESIAN", freeze_list)
+    
+            elif n > 1:
+                monomer1 = moleculeclone.extract_subsets(1)
+                orientmol.update_geom(monomer1)
+                orientmol.get_axes(False)
+            orientmol.get_orient_energy()
+            orientmol.get_orient_gradient()
+            npad = moleculeclone.natom() - monomer1.natom()
+            orientgrad = np.pad(orientmol.orient_gradient, ((0, npad),(0,0)), mode='constant')
+            orientgrad = psi4.Matrix.from_array(orientgrad)
+            orientgrad.print_out()
+
         # Compute the gradient
         G, wfn = gradient(lowername, return_wfn=True, molecule=moleculeclone, **kwargs)
         thisenergy = psi4.get_variable('CURRENT ENERGY')
+
+        if do_axis_penalty:
+            # save G before adding orient G to it
+            Gsave = G.clone()
+            G.add(orientgrad)
+            esave = thisenergy
+            psi4.set_variable('CURRENT ENERGY', thisenergy + orientmol.orient_energy)
 
         # above, used to be getting energy as last of energy list from gradient()
         # thisenergy below should ultimately be testing on wfn.energy()
@@ -1074,6 +1126,12 @@ def optimize(name, **kwargs):
         optking_rval = psi4.optking()
         moleculeclone = psi4.get_legacy_molecule()
         moleculeclone.update_geometry()
+        
+        if do_axis_penalty:
+            # restoring optking variables to their former glory
+            psi4.set_gradient(Gsave)
+            psi4.set_variable('CURRENT ENERGY', esave)
+
         if optking_rval == psi4.PsiReturnType.EndLoop:
             # if this is the end of an IRC run, set wfn, energy, and molecule to that
             # of the last optimized IRC point

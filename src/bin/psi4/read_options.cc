@@ -2426,6 +2426,12 @@ int read_options(const std::string &name, Options & options, bool suppress_print
       options.add_bool("PRINT_TRAJECTORY_XYZ_FILE", false);
       /*- Symmetry tolerance for testing whether a mode is symmetric. -*/
       options.add_double("SYMM_TOL", 0.05);
+      /*- Whether or not to run orientation restraint penalty during
+      optimization for fragment 1 of molecule. Default is false, i.e. normal
+      optimization. If set to true, perform optimization with angular penalty of
+      1000.0 kcal/mol. If set to value k, perform optimization with angular
+      penalty of k kcal/mol. -*/
+      options.add_str("TILT_PENALTY", "FALSE", "");
 
       /*- SUBSECTION Convergence Control -*/
 
